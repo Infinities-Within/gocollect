@@ -6,8 +6,7 @@ import (
 	"unsafe"
 )
 
-// Map is a type-safe implementation of sync.Map.
-// operation when it returns loaded set to false.
+// Map is a reimplementation of [sync.Map] with type parameters
 type Map[K comparable, V any] struct {
 	mu sync.Mutex
 
@@ -55,7 +54,7 @@ var expunged = unsafe.Pointer(new(any))
 
 // An entry is a slot in the map corresponding to a particular key.
 type entry[V any] struct {
-	// p points to the V value stored for the entry.
+	// p points to the interface{} value stored for the entry.
 	//
 	// If p == nil, the entry has been deleted, and either m.dirty == nil or
 	// m.dirty[key] is e.
@@ -106,16 +105,15 @@ func (m *Map[K, V]) Load(key K) (value V, ok bool) {
 	if !ok {
 		return nil, false
 	}
-	val, status := e.load()
-	return *val, status
+	return e.load()
 }
 
-func (e *entry[V]) load() (value *V, ok bool) {
+func (e *entry[V]) load() (value V, ok bool) {
 	p := atomic.LoadPointer(&e.p)
 	if p == nil || p == expunged {
 		return nil, false
 	}
-	return (*V)(p), true
+	return *(*V)(p), true
 }
 
 // Store sets the value for a key.
@@ -143,7 +141,7 @@ func (m *Map[K, V]) Store(key K, value V) {
 			m.dirtyLocked()
 			m.read.Store(readOnly[K, V]{m: read.m, amended: true})
 		}
-		m.dirty[key] = newEntry(value)
+		m.dirty[key] = newEntry[V](value)
 	}
 	m.mu.Unlock()
 }
@@ -182,7 +180,7 @@ func (e *entry[V]) storeLocked(i *V) {
 // LoadOrStore returns the existing value for the key if present.
 // Otherwise, it stores and returns the given value.
 // The loaded result is true if the value was loaded, false if stored.
-func (m *Map[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
+func (m *Map[K, V]) LoadOrStore(key, value any) (actual any, loaded bool) {
 	// Avoid locking if it's a clean hit.
 	read, _ := m.read.Load().(readOnly[K, V])
 	if e, ok := read.m[key]; ok {
@@ -209,7 +207,7 @@ func (m *Map[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
 			m.dirtyLocked()
 			m.read.Store(readOnly[K, V]{m: read.m, amended: true})
 		}
-		m.dirty[key] = newEntry(value)
+		m.dirty[key] = newEntry[V](value)
 		actual, loaded = value, false
 	}
 	m.mu.Unlock()
@@ -329,7 +327,7 @@ func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 		if !ok {
 			continue
 		}
-		if !f(k, *v) {
+		if !f(k, v) {
 			break
 		}
 	}
